@@ -1,6 +1,8 @@
 #redaction removes private info like mac addresses, serial numbers / hardware IDS, or any names involved('Jane's Airpods'), user home paths
 #and IPv4 / IPv6 addresses
 #so this sensitive info doesn't go to anthropic's servers upon tool calling
+# each os has separate formats for their respective power diagnostics tools, but this redaction tests only the private data, which is the same
+# per each os
 
 import re #regex
 
