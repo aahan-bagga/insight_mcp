@@ -7,6 +7,20 @@ An MCP server that tells your AI assistant why your laptop's battery drained. It
 
 It works on **macOS, Windows and Linux**, runs entirely on your machine, and never changes anything.
 
+## Why not just ask Claude Code?
+
+Claude Code has a terminal, so it can run `pmset`, `powercfg` or `journalctl` itself. insight has no special access: it reads the same logs. The difference is what happens after the command runs:
+
+- **The logs are too big.** `pmset -g log` holds weeks of history, often tens of thousands of lines. That's more than an AI can usefully read in one go, and tool output gets cut off long before then. insight reads the whole log on your machine and sends back a short summary.
+- **The maths is easy to get wrong.** Finding the cause means pairing every sleep with its wake, working out % lost per hour, and adding up how long each app blocked sleep with overlapping periods counted once. An AI doing this by reading text makes mistakes. insight does it in tested code, and gives the same answer every time.
+- **The wake reasons are cryptic.** The logs say things like `wifibt SMC.OutboxNotEmpty` or `rtc/Maintenance`. insight has a tested rule for each one, so the AI isn't guessing.
+- **Raw logs contain private data.** They include serial numbers, MAC addresses, device names like "Jane's AirPods" and your username. When Claude Code runs the command, all of that output is sent to your AI provider. insight removes it first.
+- **Every OS is different.** Claude Code would need to know the right commands, flags and output format for macOS, Windows and Linux. insight gives the same answer format on all three.
+- **It can't change anything.** Claude Code can run any command, including ones that change your power settings (`sudo pmset ...`). insight is read-only: it only suggests fixes, and you decide whether to run them.
+- **It's cheaper.** Raw log output uses up a lot of Claude Code's context and tokens. insight's summary is a small fraction of that.
+
+In short, Claude Code is good at explaining and advising. insight gives it accurate, compact, private data to work from.
+
 ## Tools
 
 | Tool | What it answers |
