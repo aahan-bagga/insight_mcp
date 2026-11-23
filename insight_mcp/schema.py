@@ -37,7 +37,7 @@ class PowerSource(str, Enum):
 
 
 class Cause(str, Enum):
-    """Only attribution.py may produce these."""
+    # Only attribution.py may produce these.
     USER_INPUT = "user_input"                    # lid, keyboard, trackpad, power button
     CHARGER = "charger"                          # power source change
     NETWORK = "network"                          # Wi-Fi / Ethernet / wake-on-LAN / TCP keepalive / push
@@ -75,7 +75,7 @@ class EstimateKind(str, Enum):
 # --------------------------------------------------------------------------- helpers
 def to_utc(dt: datetime) -> datetime:
     #Return a tz-aware UTC datetime. Naive input is REJECTED: collectors must
-    #localize naive OS timestamps themselves (see CONTRACT.md 'Timestamps')."""
+    #localize naive OS timestamps themselves (see CONTRACT.md 'Timestamps').
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError(f"naive datetime not allowed: {dt!r}")
     return dt.astimezone(timezone.utc)
@@ -130,7 +130,7 @@ class PowerEvent(_Serializable):
         _require_utc(self.end, "end")
         if self.charge_pct is not None and not 0 <= self.charge_pct <= 100:
             raise ValueError(f"charge_pct out of range: {self.charge_pct}")
-        from .redact import redact  # central safety net; collectors redact too (idempotent)
+        from .redact import redact  # backup: redact again here in case a collector forgot (redacting twice changes nothing)
         object.__setattr__(self, "raw", (redact(self.raw) or "")[:RAW_MAX])
         object.__setattr__(self, "raw_reason", redact(self.raw_reason))
         object.__setattr__(self, "actor", redact(self.actor))
@@ -208,6 +208,8 @@ class Attribution(_Serializable):
     suggested_fix: SuggestedFix | None
     event_count: int                     # number of events this attribution covers
     subject: str | None = None           # process / device / setting name if applicable
+    impact_s: float | None = None        # seconds of impact, used for ranking: time a blocker held the laptop awake,
+                                         # time spent in wakes, or length of a high-drain sleep. None for settings/wear.
 
     def __post_init__(self) -> None:
         if not self.evidence:
@@ -217,7 +219,7 @@ class Attribution(_Serializable):
 @dataclass(frozen=True)
 class SleepSession(_Serializable):
     #One stretch from a user/idle sleep to the next full WAKE.
-    #Split into a new session whenever the power source changes mid-sleep."""
+    #Split into a new session whenever the power source changes mid-sleep.
     start: datetime
     end: datetime
     source: PowerSource                  # constant within a session (sessions split on change)

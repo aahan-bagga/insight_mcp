@@ -266,6 +266,14 @@ def test_overlapping_blocker_intervals_counted_once():
     assert core.cause is Cause.SYSTEM_KEEPING_AWAKE
 
 
+def test_blockers_ranked_by_time_held_not_record_count():
+    # 50 one-minute records (50 min) vs one 10-hour record: the 10-hour blocker must rank first.
+    chatty = [_blocker(i * 2, i * 2 + 1, actor="nsurlsessiond") for i in range(50)]
+    long_one = [_blocker(0, 600, actor="caffeinate")]
+    atts = attribute(chatty + long_one)
+    assert [a.subject for a in atts[:2]] == ["caffeinate", "nsurlsessiond"]
+    assert atts[0].impact_s == 600 * 60 and atts[1].impact_s == 50 * 60
+
 def test_open_blocker_uses_duration_then_input_horizon():
     open_with_dur = ev(EventKind.SLEEP_BLOCKER, M, actor="zoom.us", raw="pid 1(zoom.us)", duration_s=600.0)
     open_no_dur = ev(EventKind.SLEEP_BLOCKER, M, actor="Spotify", raw="pid 2(Spotify)")
@@ -390,8 +398,8 @@ def test_ranking_and_evidence_bounds():
     atts = attribute(events)
     assert atts[0].cause is Cause.NETWORK and atts[0].event_count == 10
     assert "per hour" in atts[0].explanation
-    scores = [a.event_count * A._WEIGHT[a.confidence] for a in atts]
-    assert scores == sorted(scores, reverse=True)
+    keys = [(a.impact_s or 0.0, a.event_count * A._WEIGHT[a.confidence]) for a in atts]
+    assert keys == sorted(keys, reverse=True)
     for a in atts:
         assert 1 <= len(a.evidence) <= 5
         for e in a.evidence:

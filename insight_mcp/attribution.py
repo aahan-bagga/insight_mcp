@@ -174,6 +174,7 @@ _CAUSE_ORDER = {c: i for i, c in enumerate(Cause)}
 _MIN_DRAIN_SESSION = timedelta(minutes=30)
 _STORM_WINDOW = timedelta(minutes=10)
 _STORM_MIN = 6
+_DEFAULT_WAKE_S = 30.0  # assumed length of a wake when the OS doesn't log one
 
 
 def _iso(dt: datetime) -> str:
@@ -444,7 +445,7 @@ def _blocker_attributions(blockers: Sequence[PowerEvent], horizon: datetime) -> 
                          f"{_plural(len(evs), 'sleep-blocker record')} (overlapping intervals counted once)."
                          + _low_note(conf)),
             suggested_fix=_blocker_fix(cause, evs[0].platform, actor),
-            event_count=len(evs), subject=actor,
+            event_count=len(evs), subject=actor, impact_s=held[actor],
         ))
     return out
 
@@ -466,7 +467,7 @@ def attribute_blockers(blockers: Sequence[PowerEvent]) -> list[Attribution]:
             explanation=(f"{actor} ({kind}) is preventing sleep right now with "
                          f"{_plural(len(evs), 'active request')}, {held}." + _low_note(conf)),
             suggested_fix=_blocker_fix(cause, evs[0].platform, actor),
-            event_count=len(evs), subject=actor,
+            event_count=len(evs), subject=actor, impact_s=max(durs) if durs else None,
         ))
     return _rank(out)
 
@@ -628,7 +629,9 @@ def suggest_settings(settings: Sequence[PowerSetting], platform: Platform, *, ob
 
 # =========================================================================== attribute
 def _rank(atts: list[Attribution]) -> list[Attribution]:
-    return sorted(atts, key=lambda a: (-a.event_count * _WEIGHT[a.confidence], _CAUSE_ORDER[a.cause], a.subject or ""))
+    # Biggest battery impact first (seconds awake), then by how many records support it.
+    return sorted(atts, key=lambda a: (-(a.impact_s or 0.0), -a.event_count * _WEIGHT[a.confidence],
+                                       _CAUSE_ORDER[a.cause], a.subject or ""))
 
 
 def _wake_attributions(wakes: Sequence[PowerEvent]) -> list[Attribution]:
@@ -659,9 +662,13 @@ def _wake_attributions(wakes: Sequence[PowerEvent]) -> list[Attribution]:
                         f"e.g. \"{(evs[0].raw_reason or evs[0].raw)[:80]}\".")
             fix = _wake_fix(cause, evs[0].platform, subject)
             note = f"wake reason matched {items[0][2]}"
+        if cause is Cause.SLOW_SLEEP_ENTRY:
+            impact = sum(e.duration_s or 0 for e in evs)
+        else:
+            impact = sum(e.duration_s if e.duration_s is not None else _DEFAULT_WAKE_S for e in evs)
         out.append(Attribution(cause=cause, confidence=conf, evidence=_evidence(evs, note),
                                explanation=expl + _low_note(conf), suggested_fix=fix,
-                               event_count=len(evs), subject=subject))
+                               event_count=len(evs), subject=subject, impact_s=impact))
     return out
 
 
@@ -699,6 +706,7 @@ def _storm_attributions(dark: Sequence[PowerEvent]) -> list[Attribution]:
                          f"{counts[cause]} of them {cause.value.replace('_', ' ')}." + _low_note(conf)),
             suggested_fix=_wake_fix(cause, cluster[0].platform, None),
             event_count=len(cluster), subject=None,
+            impact_s=sum(e.duration_s if e.duration_s is not None else _DEFAULT_WAKE_S for e in cluster),
         ))
     return out
 
@@ -733,6 +741,7 @@ def _drain_attributions(recs: Sequence[_SessionRec]) -> list[Attribution]:
             suggested_fix=_wake_fix(cause, r.start_ev.platform, None) if cause is not Cause.UNKNOWN
             else _INSPECT_WAKE[r.start_ev.platform],
             event_count=1 + len(r.dark), subject=None,
+            impact_s=(s.end - s.start).total_seconds(),
         ))
     return out
 
@@ -757,7 +766,7 @@ def _wear_attribution(h: BatteryHealth) -> Attribution | None:
 
 def attribute(events: Sequence[PowerEvent], *, settings: Sequence[PowerSetting] = (),
               health: BatteryHealth | None = None, observed_at: datetime | None = None) -> list[Attribution]:
-    # Ranked by impact (event_count weighted by confidence). Includes cross-event heuristics:
+    # Ranked by impact_s (seconds of impact), then record count. Includes cross-event heuristics:
     # wake storms (>=6 dark wakes in 10 min), merged blocker intervals per actor (overlap counted once),
     # sessions with drain >= 2x the median, and wear when health_pct < 80.
     evs = sorted(events, key=lambda e: e.ts)

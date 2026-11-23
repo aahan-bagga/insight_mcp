@@ -108,3 +108,18 @@ def test_blocker_intervals_clipped_to_window():
     _, _, events = s._events(s._c(), 24)
     assert events[0].ts == NOW - timedelta(hours=24) and events[0].end == NOW - timedelta(hours=1)
     assert events[0].duration_s == 23 * 3600
+
+
+def test_sleep_report_drops_tiny_blockers_and_caps_the_list():
+    # 12 blockers held 10 min each, 1 held 30 s (noise). Fake also adds the powernap setting and 69% health.
+    blockers = [ev(EventKind.SLEEP_BLOCKER, 5, end=NOW - timedelta(hours=5) + timedelta(minutes=10),
+                   actor=f"app{i}", raw_reason=f"pid {i}(app{i}): PreventUserIdleSystemSleep") for i in range(12)]
+    blockers.append(ev(EventKind.SLEEP_BLOCKER, 4, end=NOW - timedelta(hours=4) + timedelta(seconds=30),
+                       actor="tiny", raw_reason="pid 99(tiny): PreventUserIdleSystemSleep"))
+    d = svc(events=blockers).sleep_report(24)["data"]
+    subjects = [a["subject"] for a in d["attributions"]]
+    assert "tiny" not in subjects                       # under a minute: dropped
+    assert "powernap" in subjects and None in subjects  # the setting and battery wear (Fake health is 69%) are always kept
+    assert len(subjects) == 8 + 2                       # top 8 causes + setting + wear
+    assert d["omitted"] == 4 + 1                        # 4 blockers past the top 8, plus "tiny"
+    assert all(a["impact_s"] == 600 for a in d["attributions"] if (a["subject"] or "").startswith("app"))

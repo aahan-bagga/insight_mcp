@@ -21,6 +21,9 @@ log = logging.getLogger("insight_mcp")
 
 MAX_HOURS = 720
 CACHE_TTL_S = 60.0
+TOP_N = 8                 # event-based causes sent to the AI; settings and battery wear are always sent
+MIN_BLOCKER_S = 60.0      # blockers that held the laptop awake for less than this in total are noise
+MIN_SLOW_SLEEP_S = 10.0   # same for drivers that slowed sleep entry
 
 DEFAULT_REMEDIATION: dict[str, list[str]] = {
     ErrorCode.UNSUPPORTED_PLATFORM.value: ["insight_mcp supports macOS, Windows and Linux laptops."],
@@ -150,6 +153,7 @@ class Service:
             attrs = attribution.attribute(events, settings=settings, health=health, observed_at=self._clock())
             # Lid opens and charger plugs are the user's own actions, not drain causes.
             attrs = [a for a in attrs if a.cause not in (Cause.USER_INPUT, Cause.CHARGER)]
+            attrs, omitted = _shortlist(attrs)
             rates = [s.drain_pct_per_hour for s in sessions if s.drain_pct_per_hour is not None]
             totals = {
                 "sleep_hours": round(sum((s.end - s.start).total_seconds() for s in sessions) / 3600, 2),
@@ -163,6 +167,7 @@ class Service:
                 "sessions": [s.to_dict() for s in sessions],
                 "totals": totals,
                 "attributions": [a.to_dict() for a in attrs],
+                "omitted": omitted,  # smaller causes left out to keep the reply short
             }
         return self._envelope(run)
 
@@ -170,8 +175,9 @@ class Service:
         wake_kinds = {EventKind.WAKE, EventKind.DARK_WAKE, EventKind.POWER_SOURCE, EventKind.SLEEP}
         def run(c: Collector):
             since, until, events = self._events(c, hours)
-            attrs = attribution.attribute([e for e in events if e.kind in wake_kinds])
-            return {"window": {"since": _iso(since), "until": _iso(until)}, "attributions": [a.to_dict() for a in attrs]}
+            attrs, omitted = _shortlist(attribution.attribute([e for e in events if e.kind in wake_kinds]))
+            return {"window": {"since": _iso(since), "until": _iso(until)},
+                    "attributions": [a.to_dict() for a in attrs], "omitted": omitted}
         return self._envelope(run)
 
     def who_is_keeping_me_awake(self) -> dict[str, Any]:
@@ -199,6 +205,22 @@ class Service:
                 "attributions": [a.to_dict() for a in attribution.suggest_settings(settings, c.platform, observed_at=self._clock())],
             }
         return self._envelope(run)
+
+
+def _shortlist(attrs: list) -> tuple[list, int]:
+    # Keep the reply small: drop tiny blockers/delays, keep the top TOP_N event-based causes (already ranked),
+    # and always keep settings and battery wear. Returns (kept, number omitted).
+    always = (Cause.SETTING, Cause.BATTERY_WEAR)
+    blockers = (Cause.APP_KEEPING_AWAKE, Cause.SYSTEM_KEEPING_AWAKE)
+    def noise(a) -> bool:
+        if a.cause in blockers:
+            return (a.impact_s or 0.0) < MIN_BLOCKER_S
+        if a.cause is Cause.SLOW_SLEEP_ENTRY:
+            return (a.impact_s or 0.0) < MIN_SLOW_SLEEP_S
+        return False
+    ranked = [a for a in attrs if a.cause not in always and not noise(a)]
+    kept = ranked[:TOP_N] + [a for a in attrs if a.cause in always]
+    return kept, len(attrs) - len(kept)
 
 
 def _clip(e, since: datetime, until: datetime):
